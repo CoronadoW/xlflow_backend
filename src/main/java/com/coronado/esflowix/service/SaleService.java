@@ -21,7 +21,6 @@ public class SaleService {
 
     private final SaleRepository saleRepo;
     private final RequestRepository requestRepository;
-    private final RequestService requestService;
 
     @Transactional
     public Sale createSale(SaleDto dto) {
@@ -44,11 +43,13 @@ public class SaleService {
     }
 
     @Transactional
-    private void recalculateSaleTotal(Sale sale) {
-        BigDecimal total = sale.getRequests()
+    public void recalculateSaleTotal(Sale sale) {
+        // 🔥 Usar query directa en lugar de la lista
+        BigDecimal total = requestRepository.findAllBySaleId(sale.getId())
                 .stream()
                 .map(Request::getTotalBySale)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+
         sale.setTotal(total);
         saleRepo.save(sale);
     }
@@ -90,5 +91,25 @@ public class SaleService {
         summary.put("sales", sales);
 
         return summary;
+    }
+
+    // NUEVO: Buscar o crear una venta por fecha de entrega
+    public Sale findOrCreateByDate(LocalDate deliveryDate) {
+        if (deliveryDate == null) {
+            throw new RuntimeException("La fecha de entrega es obligatoria");
+        }
+
+        List<Sale> existing = saleRepo.findByDeliveryDate(deliveryDate);
+
+        if (!existing.isEmpty()) {
+            // 🔥 Si ya existe, devolver la primera (idealmente solo debería haber una por fecha)
+            return existing.get(0);
+        }
+
+        // 🔥 Si no existe, crear una nueva
+        Sale newSale = new Sale();
+        newSale.setDeliveryDate(deliveryDate);
+        newSale.setTotal(BigDecimal.ZERO);
+        return saleRepo.save(newSale);
     }
 }

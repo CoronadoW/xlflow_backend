@@ -17,5 +17,6 @@ public class CustomerDetailDto {
 
     private String customerName;
     private BigDecimal total;
+    private String priceListName;
     private List<ProductDetailDto> products;
 }

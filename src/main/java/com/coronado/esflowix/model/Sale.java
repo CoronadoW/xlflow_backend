@@ -9,6 +9,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 @Setter
@@ -31,8 +32,8 @@ public class Sale {
     private BigDecimal total;
 
     @JsonManagedReference(value = "sale-request")
-    @OneToMany(mappedBy = "sale")
-    private List<Request> requests;
+    @OneToMany(mappedBy = "sale", cascade = CascadeType.ALL)
+    private List<Request> requests = new ArrayList<>();
 }
 
 

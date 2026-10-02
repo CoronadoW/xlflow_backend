@@ -32,6 +32,7 @@ public class RequestService {
     private final SaleRepository saleRepository;
     private final PriceListRepository priceListRepository;
     private final ProductPriceRepository productPriceRepository;
+    private final SaleService saleService;
 
     // Constante para redondeo
     private static final BigDecimal ROUND_MULTIPLE = BigDecimal.valueOf(100);
@@ -86,7 +87,6 @@ public class RequestService {
             Product product = productService.findByNormalizedName(normalizedName)
                     .orElseThrow(() -> new RuntimeException("Producto no encontrado: " + dto.getProductName()));
 
-            // 🔥 Obtener el precio de venta de ESTA lista específica
             BigDecimal productPrice = productPriceRepository
                     .findByProductAndPriceList(product, priceList)
                     .map(ProductPrice::getPriceSale)
@@ -99,7 +99,7 @@ public class RequestService {
 
             RequestProduct rp = new RequestProduct();
             rp.setProductName(product.getName());
-            rp.setProductPrice(productPrice);  // 🔥 Precio de la lista elegida
+            rp.setProductPrice(productPrice);
             rp.setQuantity(quantity);
             rp.setTotalByReqProd(totalByProduct);
             rp.setRequest(request);
@@ -110,9 +110,21 @@ public class RequestService {
 
         request.setReqProdsList(requestProducts);
         request.setTotalBySale(totalRequest);
-        request.setSale(null);
 
-        return requestRepository.save(request);
+        // 🔥 NUEVO: Buscar o crear la Sale para la fecha de entrega
+        if (requestDto.getDeliveryDate() == null) {
+            throw new RuntimeException("La fecha de entrega es obligatoria");
+        }
+        Sale sale = saleService.findOrCreateByDate(requestDto.getDeliveryDate());
+        request.setSale(sale);
+
+        // Guardar el request
+        Request savedRequest = requestRepository.save(request);
+
+        // 🔥 Recalcular total de la Sale
+        saleService.recalculateSaleTotal(sale);
+
+        return savedRequest;
     }
 
     //Actualiza un pedido con productos fusionados
@@ -149,7 +161,6 @@ public class RequestService {
             Product product = productService.findByNormalizedName(normalizedName)
                     .orElseThrow(() -> new RuntimeException("Producto no encontrado: " + dto.getProductName()));
 
-            // 🔥 Obtener el precio de venta de ESTA lista específica
             BigDecimal productPrice = productPriceRepository
                     .findByProductAndPriceList(product, priceList)
                     .map(ProductPrice::getPriceSale)
@@ -174,10 +185,20 @@ public class RequestService {
         request.getReqProdsList().addAll(requestProducts);
         request.setTotalBySale(totalRequest);
 
+        // 🔥 Si cambió la fecha, reasignar a otra Sale (opcional)
+        if (requestDto.getDeliveryDate() != null) {
+            Sale currentSale = request.getSale();
+            if (currentSale == null || !currentSale.getDeliveryDate().equals(requestDto.getDeliveryDate())) {
+                Sale newSale = saleService.findOrCreateByDate(requestDto.getDeliveryDate());
+                request.setSale(newSale);
+            }
+        }
+
         Request savedRequest = requestRepository.save(request);
 
+        // 🔥 Recalcular total de la Sale
         if (savedRequest.getSale() != null) {
-            recalculateSaleTotal(savedRequest.getSale());
+            saleService.recalculateSaleTotal(savedRequest.getSale());
         }
 
         return savedRequest;
@@ -193,18 +214,10 @@ public class RequestService {
 
         request.setSale(sale);
         requestRepository.save(request);
-        recalculateSaleTotal(sale);
+        saleService.recalculateSaleTotal(sale);
     }
 
-    @Transactional
-    private void recalculateSaleTotal(Sale sale) {
-        BigDecimal total = sale.getRequests()
-                .stream()
-                .map(Request::getTotalBySale)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        sale.setTotal(total);
-        saleRepository.save(sale);
-    }
+
 
     // ==================== CONSULTAS Y RESUMEN ====================
 
@@ -231,7 +244,7 @@ public class RequestService {
         requestRepository.delete(request);
 
         if (sale != null) {
-            recalculateSaleTotal(sale);
+            saleService.recalculateSaleTotal(sale);
         }
     }
 
@@ -347,6 +360,13 @@ public class RequestService {
                 detail.setCustomerName(request.getCustomerName());
                 detail.setTotal(request.getTotalBySale());
 
+                // 🔥 NUEVO: nombre de la lista de precios
+                if (request.getPriceList() != null) {
+                    detail.setPriceListName(request.getPriceList().getName());
+                } else {
+                    detail.setPriceListName("Sin lista"); // Para pedidos viejos
+                }
+
                 List<ProductDetailDto> products = new ArrayList<>();
                 for (RequestProduct rp : request.getReqProdsList()) {
                     ProductDetailDto pd = new ProductDetailDto();
@@ -362,7 +382,6 @@ public class RequestService {
         }
         return result;
     }
-
     // ==================== GANANCIA ====================
 
     @Transactional(readOnly = true)
@@ -381,7 +400,9 @@ public class RequestService {
 
                     if (product != null) {
                         BigDecimal quantity = rp.getQuantity();
+                        // 🔥 Usar precio de venta del RequestProduct (ya tiene el de la lista elegida)
                         totalSalePrice = totalSalePrice.add(rp.getProductPrice().multiply(quantity));
+                        // 🔥 Usar precio de compra sin redondear
                         totalPurchasePrice = totalPurchasePrice.add(product.getPricePurchase().multiply(quantity));
                     }
                 }
