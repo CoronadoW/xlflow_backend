@@ -4,16 +4,17 @@ import com.coronado.esflowix.dto.CustomerDetailDto;
 import com.coronado.esflowix.dto.ProductDetailDto;
 import com.coronado.esflowix.dto.RequestDto;
 import com.coronado.esflowix.dto.RequestProdDto;
-import com.coronado.esflowix.model.Product;
-import com.coronado.esflowix.model.Request;
-import com.coronado.esflowix.model.RequestProduct;
-import com.coronado.esflowix.model.Sale;
+import com.coronado.esflowix.model.*;
+import com.coronado.esflowix.repository.PriceListRepository;
+import com.coronado.esflowix.repository.ProductPriceRepository;
 import com.coronado.esflowix.repository.RequestRepository;
 import com.coronado.esflowix.repository.SaleRepository;
+import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.ss.util.CellRangeAddress;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -23,27 +24,21 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
+@RequiredArgsConstructor
 public class RequestService {
 
     private final RequestRepository requestRepository;
     private final ProductService productService;
     private final SaleRepository saleRepository;
+    private final PriceListRepository priceListRepository;
+    private final ProductPriceRepository productPriceRepository;
 
     // Constante para redondeo
     private static final BigDecimal ROUND_MULTIPLE = BigDecimal.valueOf(100);
 
-    public RequestService(RequestRepository requestRepository, ProductService productService, SaleRepository saleRepository) {
-        this.requestRepository = requestRepository;
-        this.productService = productService;
-        this.saleRepository = saleRepository;
-    }
-
     // ==================== MÉTODOS DE CREACIÓN Y ACTUALIZACIÓN ====================
 
-    /**
-     * 🔥 Fusiona productos duplicados en un mapa (por nombre de producto)
-     * Suma las cantidades y recalcula subtotales
-     */
+    // Fusiona productos duplicados en un mapa (por nombre de producto) / Suma las cantidades y recalcula subtotales
     private Map<String, RequestProdDto> mergeProducts(List<RequestProdDto> products) {
         Map<String, RequestProdDto> merged = new LinkedHashMap<>();
 
@@ -66,14 +61,21 @@ public class RequestService {
         return merged;
     }
 
-    /**
-     * 🔥 Crea un pedido con productos fusionados
-     */
+    // Crea un pedido con productos fusionados
+    @Transactional
     public Request createRequest(RequestDto requestDto) {
         Request request = new Request();
         request.setCustomerName(requestDto.getCustomerName());
 
-        // 🔥 Fusionar productos duplicados
+        // 🔥 Obtener la lista de precios elegida (obligatoria)
+        if (requestDto.getPriceListId() == null) {
+            throw new RuntimeException("Debe seleccionar una lista de precios");
+        }
+        PriceList priceList = priceListRepository.findById(requestDto.getPriceListId())
+                .orElseThrow(() -> new RuntimeException("Lista de precios no encontrada"));
+        request.setPriceList(priceList);
+
+        // Fusionar productos duplicados
         Map<String, RequestProdDto> mergedProducts = mergeProducts(requestDto.getRequestProdDtoList());
 
         List<RequestProduct> requestProducts = new ArrayList<>();
@@ -84,13 +86,20 @@ public class RequestService {
             Product product = productService.findByNormalizedName(normalizedName)
                     .orElseThrow(() -> new RuntimeException("Producto no encontrado: " + dto.getProductName()));
 
-            BigDecimal productPrice = product.getPriceSale();
+            // 🔥 Obtener el precio de venta de ESTA lista específica
+            BigDecimal productPrice = productPriceRepository
+                    .findByProductAndPriceList(product, priceList)
+                    .map(ProductPrice::getPriceSale)
+                    .orElseThrow(() -> new RuntimeException(
+                            "El producto '" + product.getName() + "' no tiene precio en la lista '" + priceList.getName() + "'"
+                    ));
+
             BigDecimal quantity = dto.getQuantity();
             BigDecimal totalByProduct = productPrice.multiply(quantity);
 
             RequestProduct rp = new RequestProduct();
             rp.setProductName(product.getName());
-            rp.setProductPrice(productPrice);
+            rp.setProductPrice(productPrice);  // 🔥 Precio de la lista elegida
             rp.setQuantity(quantity);
             rp.setTotalByReqProd(totalByProduct);
             rp.setRequest(request);
@@ -106,19 +115,30 @@ public class RequestService {
         return requestRepository.save(request);
     }
 
-    /**
-     * 🔥 Actualiza un pedido con productos fusionados
-     */
+    //Actualiza un pedido con productos fusionados
+    @Transactional
     public Request updateRequest(Long id, RequestDto requestDto) {
         Request request = requestRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Pedido no encontrado"));
 
         request.setCustomerName(requestDto.getCustomerName());
 
+        // 🔥 Actualizar lista de precios si cambió
+        if (requestDto.getPriceListId() != null) {
+            PriceList priceList = priceListRepository.findById(requestDto.getPriceListId())
+                    .orElseThrow(() -> new RuntimeException("Lista de precios no encontrada"));
+            request.setPriceList(priceList);
+        }
+
+        PriceList priceList = request.getPriceList();
+        if (priceList == null) {
+            throw new RuntimeException("El pedido no tiene lista de precios asignada");
+        }
+
         // 🔥 Limpiar productos antiguos
         request.getReqProdsList().clear();
 
-        // 🔥 Fusionar productos duplicados
+        // Fusionar productos duplicados
         Map<String, RequestProdDto> mergedProducts = mergeProducts(requestDto.getRequestProdDtoList());
 
         List<RequestProduct> requestProducts = new ArrayList<>();
@@ -129,7 +149,14 @@ public class RequestService {
             Product product = productService.findByNormalizedName(normalizedName)
                     .orElseThrow(() -> new RuntimeException("Producto no encontrado: " + dto.getProductName()));
 
-            BigDecimal productPrice = product.getPriceSale();
+            // 🔥 Obtener el precio de venta de ESTA lista específica
+            BigDecimal productPrice = productPriceRepository
+                    .findByProductAndPriceList(product, priceList)
+                    .map(ProductPrice::getPriceSale)
+                    .orElseThrow(() -> new RuntimeException(
+                            "El producto '" + product.getName() + "' no tiene precio en la lista '" + priceList.getName() + "'"
+                    ));
+
             BigDecimal quantity = dto.getQuantity();
             BigDecimal totalByProduct = productPrice.multiply(quantity);
 
@@ -155,9 +182,9 @@ public class RequestService {
 
         return savedRequest;
     }
-
     // ==================== ASIGNACIÓN A VENTA ====================
 
+    @Transactional
     public void attachRequestToSale(Long requestId, Long saleId) {
         Request request = requestRepository.findById(requestId)
                 .orElseThrow(() -> new RuntimeException("Request no encontrada"));
@@ -169,6 +196,7 @@ public class RequestService {
         recalculateSaleTotal(sale);
     }
 
+    @Transactional
     private void recalculateSaleTotal(Sale sale) {
         BigDecimal total = sale.getRequests()
                 .stream()
@@ -180,11 +208,13 @@ public class RequestService {
 
     // ==================== CONSULTAS Y RESUMEN ====================
 
+    @Transactional(readOnly = true)
     public Request getRequestById(Long id) {
         return requestRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Pedido no encontrado"));
     }
 
+    @Transactional(readOnly = true)
     public List<Request> getRequestsByDeliveryDate(LocalDate deliveryDate) {
         List<Sale> sales = saleRepository.findByDeliveryDate(deliveryDate);
         return sales.stream()
@@ -192,6 +222,7 @@ public class RequestService {
                 .collect(Collectors.toList());
     }
 
+    @Transactional
     public void deleteRequest(Long id) {
         Request request = requestRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Pedido no encontrado"));
@@ -206,6 +237,7 @@ public class RequestService {
 
     // ==================== RESUMEN PROVEEDOR ====================
 
+    @Transactional(readOnly = true)
     public Map<String, BigDecimal> getSupplierSummaryByDeliveryDate(LocalDate deliveryDate) {
         List<Sale> sales = saleRepository.findByDeliveryDate(deliveryDate);
         Map<String, BigDecimal> productQuantities = new HashMap<>();
@@ -230,6 +262,7 @@ public class RequestService {
                 ));
     }
 
+    @Transactional(readOnly = true)
     public Map<String, Map<String, BigDecimal>> getSupplierOrderGroupedByCategory(LocalDate deliveryDate) {
         List<Sale> sales = saleRepository.findByDeliveryDate(deliveryDate);
         Map<String, Map<String, BigDecimal>> result = new TreeMap<>();
@@ -255,6 +288,7 @@ public class RequestService {
         return result;
     }
 
+    @Transactional(readOnly = true)
     public BigDecimal calculateSupplierPaymentByDeliveryDate(LocalDate deliveryDate) {
         List<Sale> sales = saleRepository.findByDeliveryDate(deliveryDate);
         BigDecimal totalPayment = BigDecimal.ZERO;
@@ -279,6 +313,7 @@ public class RequestService {
 
     // ==================== RESUMEN CLIENTES ====================
 
+    @Transactional(readOnly = true)
     public Map<String, BigDecimal> getCustomerSummaryByDeliveryDate(LocalDate deliveryDate) {
         List<Sale> sales = saleRepository.findByDeliveryDate(deliveryDate);
         Map<String, BigDecimal> customerTotals = new HashMap<>();
@@ -301,6 +336,7 @@ public class RequestService {
                 ));
     }
 
+    @Transactional(readOnly = true)
     public List<CustomerDetailDto> getCustomerDetailsByDeliveryDate(LocalDate deliveryDate) {
         List<Sale> sales = saleRepository.findByDeliveryDate(deliveryDate);
         List<CustomerDetailDto> result = new ArrayList<>();
@@ -329,6 +365,7 @@ public class RequestService {
 
     // ==================== GANANCIA ====================
 
+    @Transactional(readOnly = true)
     public BigDecimal calculateProfitByDeliveryDate(LocalDate deliveryDate) {
         List<Sale> sales = saleRepository.findByDeliveryDate(deliveryDate);
 
@@ -356,6 +393,7 @@ public class RequestService {
 
     // ==================== BÚSQUEDA DE PRODUCTOS ====================
 
+    @Transactional(readOnly = true)
     public List<String> searchProductsByName(String query) {
         return productService.getAll().stream()
                 .filter(p -> p.isAvailable())
@@ -365,6 +403,7 @@ public class RequestService {
                 .collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
     public BigDecimal getProductSalePrice(String productName) {
         String normalizedName = normalize(productName);
         return productService.findByNormalizedName(normalizedName)

@@ -3,8 +3,11 @@ package com.coronado.esflowix.controller;
 import com.coronado.esflowix.dto.SaleDto;
 import com.coronado.esflowix.model.Sale;
 import com.coronado.esflowix.service.SaleService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -13,17 +16,15 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/sales")
+@RequiredArgsConstructor
 @CrossOrigin(origins = "http://localhost:4200")
+@Validated
 public class SaleController {
 
     private final SaleService saleService;
 
-    public SaleController(SaleService saleService) {
-        this.saleService = saleService;
-    }
-
     @PostMapping
-    public ResponseEntity<Sale> createSale(@RequestBody SaleDto dto) {
+    public ResponseEntity<Sale> createSale(@Valid @RequestBody SaleDto dto) {
         Sale sale = saleService.createSale(dto);
         return ResponseEntity.ok(sale);
     }

@@ -1,6 +1,7 @@
 // src/main/java/com/coronado/esflowix/dto/CustomerDetailDto.java
 package com.coronado.esflowix.dto;
 
+import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -13,6 +14,7 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 public class CustomerDetailDto {
+
     private String customerName;
     private BigDecimal total;
     private List<ProductDetailDto> products;

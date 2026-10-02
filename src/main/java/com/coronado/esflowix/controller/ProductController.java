@@ -1,11 +1,16 @@
 package com.coronado.esflowix.controller;
 
+import com.coronado.esflowix.dto.ImportPriceListDto;
 import com.coronado.esflowix.model.Product;
 import com.coronado.esflowix.service.ProductService;
 import com.coronado.esflowix.service.RequestService;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -15,27 +20,31 @@ import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/products")
+@RequiredArgsConstructor
+@Validated
 @CrossOrigin(origins = "http://localhost:4200")
 public class ProductController {
 
     private final ProductService productService;
     private final RequestService requestService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public ProductController(ProductService productService, RequestService requestService) {
-        this.productService = productService;
-        this.requestService = requestService;
-    }
 
     @PostMapping("/import")
     public ResponseEntity<Map<String, String>> importExcel(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(defaultValue = "0.35") double margin) {
+            @RequestParam("priceLists") String priceListsJson) {
         try {
-            productService.importExcel(file, margin);
+            List<ImportPriceListDto> configs = objectMapper.readValue(
+                    priceListsJson,
+                    new TypeReference<List<ImportPriceListDto>>() {}
+            );
+
+            productService.importExcel(file, configs);
+
             Map<String, String> response = new HashMap<>();
             response.put("message", "Productos importados correctamente");
             response.put("status", "success");

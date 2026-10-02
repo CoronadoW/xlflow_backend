@@ -5,9 +5,12 @@ import com.coronado.esflowix.model.Request;
 import com.coronado.esflowix.model.Sale;
 import com.coronado.esflowix.service.RequestService;
 import com.coronado.esflowix.service.SaleService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.ByteArrayInputStream;
@@ -18,19 +21,16 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/requests")
+@RequiredArgsConstructor
 @CrossOrigin(origins = "http://localhost:4200")
+@Validated
 public class RequestController {
 
     private final RequestService requestService;
     private final SaleService saleService;
 
-    public RequestController(RequestService requestService, SaleService saleService) {
-        this.requestService = requestService;
-        this.saleService = saleService;
-    }
-
     @PostMapping
-    public ResponseEntity<Request> createRequest(@RequestBody RequestDto requestDto) {
+    public ResponseEntity<Request> createRequest(@Valid @RequestBody RequestDto requestDto) {
         Request request = requestService.createRequest(requestDto);
         return ResponseEntity.ok(request);
     }

@@ -15,14 +15,19 @@ import java.math.BigDecimal;
 @Getter
 
 @Entity
+@Table(name = "request_product")
 public class RequestProduct {
 
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE)
     private Long id;
+    @Column(nullable = false)
     private String productName;
+    @Column(nullable = false)
     private BigDecimal productPrice;
+    @Column(nullable = false)
     private BigDecimal quantity;
+    @Column(nullable = false)
     private BigDecimal totalByReqProd;
 
     @JsonBackReference(value = "request-product")

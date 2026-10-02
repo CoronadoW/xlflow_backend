@@ -1,10 +1,17 @@
 package com.coronado.esflowix.service;
 
+import com.coronado.esflowix.dto.ImportPriceListDto;
+import com.coronado.esflowix.model.PriceList;
 import com.coronado.esflowix.model.Product;
 
+import com.coronado.esflowix.model.ProductPrice;
+import com.coronado.esflowix.repository.PriceListRepository;
+import com.coronado.esflowix.repository.ProductPriceRepository;
+import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import com.coronado.esflowix.repository.ProductRepository;
 
@@ -17,23 +24,57 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
+@RequiredArgsConstructor
 public class ProductService {
 
     private final ProductRepository productRepository;
+    private final PriceListRepository priceListRepository;
+    private final ProductPriceRepository productPriceRepository;
 
-    // 🔥 Constante para el redondeo
+    // Constante para el redondeo
     private static final BigDecimal ROUND_MULTIPLE = BigDecimal.valueOf(100);
     private static final int SCALE = 2;
 
-    public ProductService( ProductRepository productRepository){
-        this.productRepository = productRepository;
-    }
-
     //Import excel
-    public void importExcel(MultipartFile file, double margin) {
+    @Transactional
+    // 🔥 Reemplazar el método importExcel
+    public void importExcel(MultipartFile file, List<ImportPriceListDto> priceListsConfig) {
+
+        // 🔥 1. Obtener o crear todas las listas de precios
+        Map<Long, PriceList> priceListsMap = new HashMap<>();
+        Map<Long, BigDecimal> marginsMap = new HashMap<>();
+
+        for (ImportPriceListDto config : priceListsConfig) {
+            // Normalizar el margen (ej: 0.35)
+            BigDecimal margin = config.getMargin();
+
+            // Buscar por nombre, si no existe crear
+            PriceList priceList = priceListRepository.findByName(config.getName())
+                    .orElseGet(() -> {
+                        PriceList newList = new PriceList();
+                        newList.setName(config.getName());
+                        newList.setMargin(margin);
+                        newList.setActive(true);
+                        return priceListRepository.save(newList);
+                    });
+
+            // Si ya existe pero el margen cambió, actualizarlo
+            if (priceList.getMargin().compareTo(margin) != 0) {
+                priceList.setMargin(margin);
+                priceListRepository.save(priceList);
+            }
+
+            priceListsMap.put(priceList.getId(), priceList);
+            marginsMap.put(priceList.getId(), margin);
+        }
+
         Map<String, Product> productsToSave = new HashMap<>();
         List<Product> productsToUpdate = new ArrayList<>();
         Set<String> importedNames = new HashSet<>();
+
+        // 🔥 2. Guardar los precios calculados temporalmente
+        Map<String, Map<Long, BigDecimal>> productPricesToSave = new HashMap<>();
+        // Estructura: normalizedName -> (priceListId -> precio)
 
         try (InputStream is = file.getInputStream();
              XSSFWorkbook workbook = new XSSFWorkbook(is)) {
@@ -75,7 +116,6 @@ public class ProductService {
                         product.setCategory(currentCategory);
                         product.setAvailable(false);
                         product.setPricePurchase(BigDecimal.ZERO);
-                        product.setPriceSale(BigDecimal.ZERO);
                         productsToSave.put(normalizedName, product);
                     }
                     continue;
@@ -97,47 +137,36 @@ public class ProductService {
                     continue;
                 }
 
-                // Calcular precio de venta con margen
-                BigDecimal marginBD = BigDecimal.valueOf(margin);
-                BigDecimal priceSale = pricePurchase.add(pricePurchase.multiply(marginBD));
-
-                // Redondear el precio de venta al múltiplo de 100 superior
-                BigDecimal roundedPriceSale = roundUpTo100(priceSale);
-
                 Product existing = existingMap.get(normalizedName);
 
                 if (existing != null) {
                     boolean changed = false;
-
-                    // 🔥 CORREGIDO: Actualizar precio de compra SIEMPRE que cambie
                     if (existing.getPricePurchase().compareTo(pricePurchase) != 0) {
                         existing.setPricePurchase(pricePurchase);
                         changed = true;
                     }
-
-                    // 🔥 NUEVO: Siempre actualizar el precio de venta redondeado
-                    // (incluso si el precio de compra no cambió, porque podría estar sin redondear)
-                    if (existing.getPriceSale().compareTo(roundedPriceSale) != 0) {
-                        existing.setPriceSale(roundedPriceSale);
-                        changed = true;
-                    }
-
-                    // Actualizar categoría si cambió
                     String existingCategory = existing.getCategory() == null ? "" : existing.getCategory();
                     if (currentCategory != null && !currentCategory.equalsIgnoreCase(existingCategory)) {
                         existing.setCategory(currentCategory);
                         changed = true;
                     }
-
-                    // Actualizar disponibilidad
                     if (!existing.isAvailable()) {
                         existing.setAvailable(true);
                         changed = true;
                     }
-
                     if (changed) {
                         productsToUpdate.add(existing);
                     }
+
+                    // 🔥 Calcular precio para cada lista
+                    Map<Long, BigDecimal> pricesByList = new HashMap<>();
+                    for (Map.Entry<Long, BigDecimal> entry : marginsMap.entrySet()) {
+                        BigDecimal margin = entry.getValue();
+                        BigDecimal priceSale = pricePurchase.add(pricePurchase.multiply(margin));
+                        BigDecimal rounded = roundUpTo100(priceSale);
+                        pricesByList.put(entry.getKey(), rounded);
+                    }
+                    productPricesToSave.put(normalizedName, pricesByList);
 
                 } else {
                     if (!productsToSave.containsKey(normalizedName)) {
@@ -146,35 +175,73 @@ public class ProductService {
                         product.setNormalizedName(normalizedName);
                         product.setCategory(currentCategory);
                         product.setPricePurchase(pricePurchase);
-                        product.setPriceSale(roundedPriceSale);
                         product.setAvailable(true);
                         productsToSave.put(normalizedName, product);
+
+                        // 🔥 Calcular precio para cada lista
+                        Map<Long, BigDecimal> pricesByList = new HashMap<>();
+                        for (Map.Entry<Long, BigDecimal> entry : marginsMap.entrySet()) {
+                            BigDecimal margin = entry.getValue();
+                            BigDecimal priceSale = pricePurchase.add(pricePurchase.multiply(margin));
+                            BigDecimal rounded = roundUpTo100(priceSale);
+                            pricesByList.put(entry.getKey(), rounded);
+                        }
+                        productPricesToSave.put(normalizedName, pricesByList);
                     }
                 }
             }
 
-            // 🔥 NUEVO: También actualizar productos que no cambiaron de precio pero tienen precio sin redondear
-            // Esto es para corregir productos existentes que ya estaban en la base de datos
-            for (Product existing : allProducts) {
-                // Si el producto está disponible y su precio de venta no es múltiplo de 100
-                if (existing.isAvailable()) {
-                    BigDecimal currentPrice = existing.getPriceSale();
-                    BigDecimal roundedPrice = roundUpTo100(currentPrice);
-
-                    // Si el precio actual no es múltiplo de 100, redondearlo
-                    if (currentPrice.compareTo(roundedPrice) != 0) {
-                        System.out.println("🔄 Corrigiendo precio de " + existing.getName() +
-                                ": " + currentPrice + " → " + roundedPrice);
-                        existing.setPriceSale(roundedPrice);
-                        productsToUpdate.add(existing);
-                    }
-                }
-            }
-
-            productRepository.saveAll(productsToSave.values());
+            // 🔥 3. Guardar productos nuevos
+            List<Product> savedProducts = productRepository.saveAll(productsToSave.values());
             productRepository.saveAll(productsToUpdate);
 
-            // Marcar como no disponibles los que no vinieron
+            // 🔥 4. Ahora guardar los precios por lista
+            // Recorremos TODOS los productos (nuevos + actualizados + existentes)
+            List<Product> allSavedProducts = new ArrayList<>();
+            allSavedProducts.addAll(savedProducts);
+            allSavedProducts.addAll(productsToUpdate);
+
+            // 🔥 Para los productos que no cambiaron, también hay que recalcular
+            // Tomamos todos los productos existentes + nuevos
+            Map<String, Product> finalProductsMap = new HashMap<>();
+            for (Product p : allProducts) {
+                finalProductsMap.put(p.getNormalizedName(), p);
+            }
+            for (Product p : savedProducts) {
+                finalProductsMap.put(p.getNormalizedName(), p);
+            }
+
+            for (Map.Entry<String, Map<Long, BigDecimal>> entry : productPricesToSave.entrySet()) {
+                String normalizedName = entry.getKey();
+                Product product = finalProductsMap.get(normalizedName);
+                if (product == null) continue;
+
+                for (Map.Entry<Long, BigDecimal> priceEntry : entry.getValue().entrySet()) {
+                    Long priceListId = priceEntry.getKey();
+                    BigDecimal priceSale = priceEntry.getValue();
+                    PriceList priceList = priceListsMap.get(priceListId);
+
+                    // Buscar si ya existe
+                    Optional<ProductPrice> existing = productPriceRepository
+                            .findByProductAndPriceList(product, priceList);
+
+                    if (existing.isPresent()) {
+                        ProductPrice pp = existing.get();
+                        if (pp.getPriceSale().compareTo(priceSale) != 0) {
+                            pp.setPriceSale(priceSale);
+                            productPriceRepository.save(pp);
+                        }
+                    } else {
+                        ProductPrice pp = new ProductPrice();
+                        pp.setProduct(product);
+                        pp.setPriceList(priceList);
+                        pp.setPriceSale(priceSale);
+                        productPriceRepository.save(pp);
+                    }
+                }
+            }
+
+            // 🔥 5. Marcar como no disponibles los que no vinieron
             for (Product product : allProducts) {
                 if (!importedNames.contains(product.getNormalizedName())) {
                     product.setAvailable(false);
@@ -184,146 +251,12 @@ public class ProductService {
 
             System.out.println("✅ Nuevos: " + productsToSave.size());
             System.out.println("🔄 Actualizados: " + productsToUpdate.size());
+            System.out.println("💰 Precios guardados para " + priceListsMap.size() + " listas");
 
         } catch (Exception e) {
             throw new RuntimeException("Error al importar Excel", e);
         }
     }
-    /*public void importExcel(MultipartFile file, double margin) {
-        Map<String, Product> productsToSave = new HashMap<>();
-        List<Product> productsToUpdate = new ArrayList<>();
-        Set<String> importedNames = new HashSet<>();
-
-        try (InputStream is = file.getInputStream();
-             XSSFWorkbook workbook = new XSSFWorkbook(is)) {
-
-            Sheet sheet = workbook.getSheetAt(0);
-            String currentCategory = null;
-            List<Product> allProducts = productRepository.findAll();
-
-            Map<String, Product> existingMap = new HashMap<>();
-            for (Product p : allProducts) {
-                existingMap.put(p.getNormalizedName(), p);
-            }
-
-            for (Row row : sheet) {
-                if (row.getRowNum() < 10) continue;
-                if (row.getCell(1) == null) continue;
-
-                String name = row.getCell(1).toString().trim();
-                if (name.isEmpty()) continue;
-
-                String normalizedName = normalize(name);
-                String priceRaw = row.getCell(2) != null ? row.getCell(2).toString().trim() : "";
-                String normalizedPrice = priceRaw.toLowerCase().replaceAll("\\s+", "");
-
-                importedNames.add(normalizedName);
-
-                // CASO 1: SIN STOCK
-                if (normalizedPrice.contains("sinstock")) {
-                    Product existing = existingMap.get(normalizedName);
-                    if (existing != null) {
-                        if (existing.isAvailable()) {
-                            existing.setAvailable(false);
-                            productsToUpdate.add(existing);
-                        }
-                    } else {
-                        Product product = new Product();
-                        product.setName(name);
-                        product.setNormalizedName(normalizedName);
-                        product.setCategory(currentCategory);
-                        product.setAvailable(false);
-                        product.setPricePurchase(BigDecimal.ZERO);
-                        product.setPriceSale(BigDecimal.ZERO);
-                        productsToSave.put(normalizedName, product);
-                    }
-                    continue;
-                }
-
-                // CASO 2: CATEGORÍA
-                boolean isCategory = (row.getCell(2) == null || priceRaw.isBlank());
-                if (isCategory) {
-                    currentCategory = name;
-                    continue;
-                }
-
-                // CASO 3: PRODUCTO REAL
-                BigDecimal pricePurchase;
-                try {
-                    pricePurchase = parsePrice(priceRaw);
-                } catch (Exception e) {
-                    System.out.println("⚠️ Error parseando precio: " + priceRaw + " | Producto: " + name);
-                    continue;
-                }
-
-                // 🔥 Calcular precio de venta con margen
-                BigDecimal marginBD = BigDecimal.valueOf(margin);
-                BigDecimal priceSale = pricePurchase.add(pricePurchase.multiply(marginBD));
-
-                // 🔥 Redondear el precio de venta al múltiplo de 100 superior
-                BigDecimal roundedPriceSale = roundUpTo100(priceSale);
-
-                Product existing = existingMap.get(normalizedName);
-
-                if (existing != null) {
-                    boolean changed = false;
-
-                    // 🔥 Guardar precio de compra sin redondear
-                    if (existing.getPricePurchase().compareTo(pricePurchase) != 0) {
-                        existing.setPricePurchase(pricePurchase);
-                        // 🔥 Guardar precio de venta REDONDEADO
-                        existing.setPriceSale(roundedPriceSale);
-                        changed = true;
-                    }
-
-                    String existingCategory = existing.getCategory() == null ? "" : existing.getCategory();
-                    if (currentCategory != null && !currentCategory.equalsIgnoreCase(existingCategory)) {
-                        existing.setCategory(currentCategory);
-                        changed = true;
-                    }
-
-                    if (!existing.isAvailable()) {
-                        existing.setAvailable(true);
-                        changed = true;
-                    }
-
-                    if (changed) {
-                        productsToUpdate.add(existing);
-                    }
-
-                } else {
-                    if (!productsToSave.containsKey(normalizedName)) {
-                        Product product = new Product();
-                        product.setName(name);
-                        product.setNormalizedName(normalizedName);
-                        product.setCategory(currentCategory);
-                        product.setPricePurchase(pricePurchase);
-                        // 🔥 Guardar precio de venta REDONDEADO
-                        product.setPriceSale(roundedPriceSale);
-                        product.setAvailable(true);
-                        productsToSave.put(normalizedName, product);
-                    }
-                }
-            }
-
-            productRepository.saveAll(productsToSave.values());
-            productRepository.saveAll(productsToUpdate);
-
-            for (Product product : allProducts) {
-                if (!importedNames.contains(product.getNormalizedName())) {
-                    product.setAvailable(false);
-                }
-            }
-            productRepository.saveAll(allProducts);
-
-            System.out.println("✅ Nuevos: " + productsToSave.size());
-            System.out.println("🔄 Actualizados: " + productsToUpdate.size());
-
-        } catch (Exception e) {
-            throw new RuntimeException("Error al importar Excel", e);
-        }
-    }*/
-
     private String normalize(String text) {
         return text.toLowerCase()
                 .trim()
@@ -351,10 +284,12 @@ public class ProductService {
         return new BigDecimal(cleaned).setScale(SCALE, RoundingMode.HALF_UP);
     }
 
+    @Transactional(readOnly = true)
     public Optional<Product> findByNormalizedName(String normalizedName){
         return productRepository.findByNormalizedName(normalizedName);
     }
 
+    @Transactional(readOnly = true)
     public List<Product> getAll(){
         return productRepository.findAll();
     }
@@ -492,14 +427,5 @@ public class ProductService {
             throw new RuntimeException("Error generando Excel", e);
         }
     }
-
-
-
-
-
-    //Metodo para mostrar los productos que subieron
-    //Metodo para mostrar los productos que bajaron
-    //Metodo para mostrar los productos que no estan disponibles en la lista
-
 
 }

@@ -17,14 +17,17 @@ import java.util.List;
 @AllArgsConstructor
 
 @Entity
+@Table(name = "sale")
 public class Sale {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(unique = true, nullable = false)
     private LocalDate deliveryDate;
 
+    @Column(nullable = false)
     private BigDecimal total;
 
     @JsonManagedReference(value = "sale-request")
