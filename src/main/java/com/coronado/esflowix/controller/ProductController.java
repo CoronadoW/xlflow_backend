@@ -1,6 +1,7 @@
 package com.coronado.esflowix.controller;
 
 import com.coronado.esflowix.dto.ImportPriceListDto;
+import com.coronado.esflowix.dto.ProductDto;
 import com.coronado.esflowix.model.Product;
 import com.coronado.esflowix.service.ProductService;
 import com.coronado.esflowix.service.RequestService;
@@ -57,9 +58,10 @@ public class ProductController {
         }
     }
 
-    @GetMapping("/export/excel")
-    public ResponseEntity<InputStreamResource> exportExcel() {
-        ByteArrayInputStream in = productService.exportProductsToExcel();
+    // 🔥 MODIFICAR: Recibir priceListId
+    @GetMapping("/export/excel/{priceListId}")
+    public ResponseEntity<InputStreamResource> exportExcel(@PathVariable Long priceListId) {
+        ByteArrayInputStream in = productService.exportProductsToExcel(priceListId);
         return ResponseEntity.ok()
                 .header("Content-Disposition", "attachment; filename=productos.xlsx")
                 .header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -91,5 +93,11 @@ public class ProductController {
     @GetMapping("/delivery/{date}/profit")
     public BigDecimal getProfit(@PathVariable LocalDate date) {
         return requestService.calculateProfitByDeliveryDate(date);
+    }
+
+    // 🔥 NUEVO: Obtener productos con el precio de una lista específica
+    @GetMapping("/by-price-list/{priceListId}")
+    public ResponseEntity<List<ProductDto>> getProductsByPriceList(@PathVariable Long priceListId) {
+        return ResponseEntity.ok(productService.getProductsByPriceList(priceListId));
     }
 }

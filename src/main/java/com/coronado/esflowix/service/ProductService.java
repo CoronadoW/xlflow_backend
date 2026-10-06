@@ -1,6 +1,7 @@
 package com.coronado.esflowix.service;
 
 import com.coronado.esflowix.dto.ImportPriceListDto;
+import com.coronado.esflowix.dto.ProductDto;
 import com.coronado.esflowix.model.PriceList;
 import com.coronado.esflowix.model.Product;
 
@@ -163,8 +164,16 @@ public class ProductService {
                     for (Map.Entry<Long, BigDecimal> entry : marginsMap.entrySet()) {
                         BigDecimal margin = entry.getValue();
                         BigDecimal priceSale = pricePurchase.add(pricePurchase.multiply(margin));
-                        BigDecimal rounded = roundUpTo100(priceSale);
-                        pricesByList.put(entry.getKey(), rounded);
+
+                        // 🔥 Si el margen es 0, NO redondear (precio de costo tal cual)
+                        BigDecimal finalPrice;
+                        if (margin.compareTo(BigDecimal.ZERO) == 0) {
+                            finalPrice = priceSale;  // Sin redondeo
+                        } else {
+                            finalPrice = roundUpTo100(priceSale);  // Con redondeo al múltiplo de 100
+                        }
+
+                        pricesByList.put(entry.getKey(), finalPrice);
                     }
                     productPricesToSave.put(normalizedName, pricesByList);
 
@@ -183,8 +192,16 @@ public class ProductService {
                         for (Map.Entry<Long, BigDecimal> entry : marginsMap.entrySet()) {
                             BigDecimal margin = entry.getValue();
                             BigDecimal priceSale = pricePurchase.add(pricePurchase.multiply(margin));
-                            BigDecimal rounded = roundUpTo100(priceSale);
-                            pricesByList.put(entry.getKey(), rounded);
+
+                            // 🔥 Si el margen es 0, NO redondear (precio de costo tal cual)
+                            BigDecimal finalPrice;
+                            if (margin.compareTo(BigDecimal.ZERO) == 0) {
+                                finalPrice = priceSale;  // Sin redondeo
+                            } else {
+                                finalPrice = roundUpTo100(priceSale);  // Con redondeo al múltiplo de 100
+                            }
+
+                            pricesByList.put(entry.getKey(), finalPrice);
                         }
                         productPricesToSave.put(normalizedName, pricesByList);
                     }
@@ -257,6 +274,7 @@ public class ProductService {
             throw new RuntimeException("Error al importar Excel", e);
         }
     }
+
     private String normalize(String text) {
         return text.toLowerCase()
                 .trim()
@@ -306,7 +324,11 @@ public class ProductService {
     }
 
     //Metodo para exportar el excel
-    public ByteArrayInputStream exportProductsToExcel() {
+    public ByteArrayInputStream exportProductsToExcel(Long priceListId) {
+
+        // 🔥 Obtener la lista
+        PriceList priceList = priceListRepository.findById(priceListId)
+                .orElseThrow(() -> new RuntimeException("Lista de precios no encontrada"));
 
         List<Product> products = productRepository
                 .findAllByAvailableTrueOrderByCategoryAscNameAsc();
@@ -353,6 +375,11 @@ public class ProductService {
             Row dateRow = sheet.createRow(rowIdx++);
             dateRow.setHeight((short) 500);
             dateRow.createCell(0).setCellValue("Fecha: " + java.time.LocalDate.now());
+
+            // 🔥 NUEVO: Lista de precios en el header
+            Row listRow = sheet.createRow(rowIdx++);
+            listRow.setHeight((short) 500);
+            listRow.createCell(0).setCellValue("Lista: " + priceList.getName());
 
             rowIdx++; // espacio
 
@@ -404,10 +431,16 @@ public class ProductService {
 
                 for (Product p : grouped.get(category)) {
                     Row row = sheet.createRow(rowIdx++);
-                    //  Usar el precio ya redondeado
+
+                    // 🔥 Obtener el precio de la lista elegida
+                    BigDecimal price = productPriceRepository
+                            .findByProductAndPriceList(p, priceList)
+                            .map(ProductPrice::getPriceSale)
+                            .orElse(BigDecimal.ZERO);
+
                     row.createCell(0).setCellValue(p.getName());
                     Cell priceCell = row.createCell(1);
-                    priceCell.setCellValue(p.getPriceSale().doubleValue());
+                    priceCell.setCellValue(price.doubleValue());
                     priceCell.setCellStyle(priceStyle);
                 }
 
@@ -417,7 +450,7 @@ public class ProductService {
             // 🔥 AJUSTES
             sheet.autoSizeColumn(0);
             sheet.autoSizeColumn(1);
-            sheet.setColumnWidth(3, 5000); // espacio para logo
+            sheet.setColumnWidth(3, 1000); // espacio para logo
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             workbook.write(out);
@@ -426,6 +459,40 @@ public class ProductService {
         } catch (Exception e) {
             throw new RuntimeException("Error generando Excel", e);
         }
+    }
+
+    // 🔥 NUEVO: Obtener productos con el precio de una lista específica
+    @Transactional(readOnly = true)
+    public List<ProductDto> getProductsByPriceList(Long priceListId) {
+        PriceList priceList = priceListRepository.findById(priceListId)
+                .orElseThrow(() -> new RuntimeException("Lista de precios no encontrada"));
+
+        List<Product> products = productRepository.findAllByAvailableTrueOrderByCategoryAscNameAsc();
+
+        List<ProductDto> result = new ArrayList<>();
+        for (Product product : products) {
+            // Buscar el precio para esta lista
+            Optional<ProductPrice> pp = productPriceRepository
+                    .findByProductAndPriceList(product, priceList);
+
+            // Si no tiene precio en esta lista, lo saltamos
+            if (pp.isEmpty()) continue;
+
+            ProductDto dto = new ProductDto();
+            dto.setId(product.getId());
+            dto.setName(product.getName());
+            dto.setNormalizedName(product.getNormalizedName());
+            dto.setCategory(product.getCategory());
+            dto.setPricePurchase(product.getPricePurchase());
+            dto.setPriceSale(pp.get().getPriceSale());  // 🔥 Precio de la lista
+            dto.setAvailable(product.isAvailable());
+            dto.setPriceListId(priceList.getId());
+            dto.setPriceListName(priceList.getName());
+
+            result.add(dto);
+        }
+
+        return result;
     }
 
 }

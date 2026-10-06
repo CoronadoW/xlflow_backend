@@ -14,6 +14,7 @@ public interface PriceListRepository extends JpaRepository<PriceList, Long> {
     List<PriceList> findAllByActiveTrue();
     Optional<PriceList> findByName(String name);
     Optional<PriceList> findByMargin(BigDecimal margin);
+    Optional<PriceList> findById(Long id);
     boolean existsByName(String name);
 
 }

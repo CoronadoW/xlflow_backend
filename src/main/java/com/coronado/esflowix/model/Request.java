@@ -39,7 +39,8 @@ public class Request {
     @JoinColumn(name = "sale_id")
     private Sale sale;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "prices_list_id")
+    // Cambiado de Lazy a Eager, solo tiene dos campos (perfile cosumidor final y negocio).
+    // Ignorar el hibernateLazyInitializer
+    @ManyToOne(fetch = FetchType.EAGER)  @JoinColumn(name = "price_list_id")
     private PriceList priceList;
 }

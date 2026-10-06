@@ -1,5 +1,6 @@
 package com.coronado.esflowix.model;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -40,6 +41,7 @@ public class Product {
     @Column(nullable = false)
     private boolean available;
 
+    @JsonBackReference
     @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<ProductPrice> productPrices = new ArrayList<>();
 
