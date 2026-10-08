@@ -17,7 +17,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/sales")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "http://localhost:4200")
+//CorsConfig implements adsCorsMapping for Development (localhost:4200) and Production in the Server (https://xlflow.coronadodev.com)
+//@CrossOrigin(origins = "http://localhost:4200")
 @Validated
 public class SaleController {
 
