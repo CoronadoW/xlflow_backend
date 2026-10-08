@@ -117,6 +117,7 @@ public class ProductService {
                         product.setCategory(currentCategory);
                         product.setAvailable(false);
                         product.setPricePurchase(BigDecimal.ZERO);
+                        product.setPriceSale(BigDecimal.ZERO);
                         productsToSave.put(normalizedName, product);
                     }
                     continue;
@@ -142,15 +143,26 @@ public class ProductService {
 
                 if (existing != null) {
                     boolean changed = false;
+
+                    // Actualizar precio de compra si cambió
                     if (existing.getPricePurchase().compareTo(pricePurchase) != 0) {
                         existing.setPricePurchase(pricePurchase);
                         changed = true;
                     }
+
+                    // 🔥 SIEMPRE recalcular price_sale (por si era null o el margen cambió)
+                    BigDecimal newPriceSale = calculateDefaultPriceSale(pricePurchase);
+                    if (existing.getPriceSale() == null || existing.getPriceSale().compareTo(newPriceSale) != 0) {
+                        existing.setPriceSale(newPriceSale);
+                        changed = true;
+                    }
+
                     String existingCategory = existing.getCategory() == null ? "" : existing.getCategory();
                     if (currentCategory != null && !currentCategory.equalsIgnoreCase(existingCategory)) {
                         existing.setCategory(currentCategory);
                         changed = true;
                     }
+
                     if (!existing.isAvailable()) {
                         existing.setAvailable(true);
                         changed = true;
@@ -184,6 +196,7 @@ public class ProductService {
                         product.setNormalizedName(normalizedName);
                         product.setCategory(currentCategory);
                         product.setPricePurchase(pricePurchase);
+                        product.setPriceSale(calculateDefaultPriceSale(pricePurchase));
                         product.setAvailable(true);
                         productsToSave.put(normalizedName, product);
 
@@ -495,4 +508,14 @@ public class ProductService {
         return result;
     }
 
+    /**
+     * Calcula el precio de venta base (con el margen por defecto: 35% para consumidor final).
+     * Este precio queda como referencia en el producto.
+     * La interfaz siempre muestra el precio de la lista seleccionada (product_price).
+     */
+    private BigDecimal calculateDefaultPriceSale(BigDecimal pricePurchase) {
+        BigDecimal defaultMargin = new BigDecimal("0.35"); // 35% por defecto
+        BigDecimal priceSale = pricePurchase.add(pricePurchase.multiply(defaultMargin));
+        return roundUpTo100(priceSale);
+    }
 }
